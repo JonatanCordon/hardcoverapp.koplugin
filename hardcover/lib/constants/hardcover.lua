@@ -5,6 +5,11 @@ local Hardcover = {
     FINISHED = 3,
     DNF = 5,
   },
+  READING_FORMAT = {
+    PHYSICAL = 1,
+    AUDIOBOOK = 2,
+    EBOOK = 4,
+  },
   PRIVACY = {
     PUBLIC = 1,
     FOLLOWS = 2,

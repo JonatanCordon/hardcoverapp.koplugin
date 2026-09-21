@@ -26,6 +26,19 @@ describe("table_util", function()
       }
       assert.is_nil(table_util.dig(t, "a", "c", 3))
     end)
+
+    it("returns nil when the root is nil", function()
+      assert.is_nil(table_util.dig(nil, "a", "b"))
+    end)
+
+    it("returns nil when an intermediate value is not a table", function()
+      local t = {
+        a = "string",
+        b = 10,
+      }
+      assert.is_nil(table_util.dig(t, "a", "b"))
+      assert.is_nil(table_util.dig(t, "b", "c"))
+    end)
   end)
 
   describe("map", function()

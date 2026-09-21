@@ -2,6 +2,7 @@
 local _ = require("gettext")
 local logger = require("logger")
 local util = require("util")
+local T = require("ffi/util").template
 
 local UIManager = require("ui/uimanager")
 
@@ -32,7 +33,7 @@ function Hardcover:showLinkBookDialog(force_search, link_callback)
   end
 
   self.dialog_manager:buildSearchDialog(
-    "Select book",
+    _("Select book"),
     books,
     {
       book_id = self.settings:getLinkedBookId()
@@ -52,8 +53,8 @@ end
 function Hardcover:cacheRandomBooks()
   local user_id = User:getId()
 
-  local books, error = Api:getRandomToRead(user_id, 10)
-  if error then
+  local books, err = Api:getRandomToRead(user_id, 10)
+  if err then
     UIManager:show(InfoMessage:new {
       text = _("Error fetching to-read list"),
       icon = "notice-warning",
@@ -75,7 +76,7 @@ function Hardcover:showRandomBookDialog()
 
     if not cache.random_books or #cache.random_books == 0 then
       UIManager:show(Notification:new {
-        text = "No books found on Want to Read list",
+        text = _("No books found on Want to Read list"),
         timeout = 4
       })
 
@@ -88,7 +89,7 @@ function Hardcover:showRandomBookDialog()
       return
     end
 
-    self.dialog_manager:buildBookListDialog("Suggest a book", cache.random_books, function()
+    self.dialog_manager:buildBookListDialog(_("Suggest a book"), cache.random_books, function()
       books = self:cacheRandomBooks()
       if books then
         self.dialog_manager:updateRandomBooks(books)
@@ -100,7 +101,7 @@ end
 function Hardcover:updateCurrentBookStatus(status, privacy_setting_id)
   self.cache:updateBookStatus(self.ui.document.file, status, privacy_setting_id)
   if not self.state.book_status.id then
-    self.dialog_manager:showError("Book status could not be updated")
+    self.dialog_manager:showError(_("Book status could not be updated"))
   end
 end
 
@@ -115,22 +116,22 @@ end
 function Hardcover:linkBook(book)
   local filename = self.ui.document.file
 
-  local delete = {}
-  local clear_keys = { "book_id", "edition_id", "edition_format", "pages", "title" }
-  for _, key in ipairs(clear_keys) do
-    if book[key] == nil then
-      table.insert(delete, key)
-    end
-  end
-
   local new_settings = {
     book_id = book.book_id,
     edition_id = book.edition_id,
     edition_format = Book:editionFormatName(book.edition_format, book.reading_format_id),
     pages = book.pages,
     title = book.title,
-    _delete = delete
   }
+
+  -- clear previously linked values which the new book does not have
+  local delete = {}
+  for _, key in ipairs(SETTING.LINKED_BOOK_KEYS) do
+    if new_settings[key] == nil then
+      table.insert(delete, key)
+    end
+  end
+  new_settings._delete = delete
 
   self.settings:updateBookSetting(filename, new_settings)
   self.cache:cacheUserBook()
@@ -182,7 +183,7 @@ function Hardcover:autolinkBook(book)
   local linked = self:linkBook(book)
   if linked then
     UIManager:show(Notification:new {
-      text = _("Linked to: " .. book.title),
+      text = T(_("Linked to: %1"), book.title),
     })
   end
 end

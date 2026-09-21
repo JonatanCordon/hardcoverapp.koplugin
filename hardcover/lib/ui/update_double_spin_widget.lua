@@ -1,12 +1,8 @@
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonTable = require("ui/widget/buttontable")
 local CenterContainer = require("ui/widget/container/centercontainer")
-local Device = require("device")
-local FocusManager = require("ui/widget/focusmanager")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
-local GestureRange = require("ui/gesturerange")
-local Font = require("ui/font")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local MovableContainer = require("ui/widget/container/movablecontainer")
 local NumberPickerWidget = require("ui/widget/numberpickerwidget")
@@ -17,7 +13,6 @@ local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
-local Screen = Device.screen
 local T = require("ffi/util").template
 
 local DoubleSpinWidget = require("ui/widget/doublespinwidget")

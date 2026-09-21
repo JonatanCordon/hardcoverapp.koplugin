@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+* Fix linking books by `hardcover-edition` identifier (invalid query)
+* Fix page progress not being displayed after creating a new read from "Update page"
+* Fix edition list not preferring editions you have read, and a possible crash when sorting editions
+* Fix pending progress updates not being sent when closing a book or disconnecting from the network
+* Fix book information fetch not restarting after wifi reconnects, and retries continuing after suspend
+* Fix crash when a rating could not be saved
+* Fix linked edition format occasionally being cleared when linking a book
+* Fix journal entry "saved" message using the wrong entry type
+* Fix language display in edition search results
+* Fix possible crashes on unexpected API responses and missing cover images
+* Fix "About" hanging or crashing when checking for new releases
+* Show a message and disable the plugin when the API key is missing, instead of failing to load
+* Report when a book status could not be saved, instead of always showing "saved"
+* Mark more menu and dialog text as translatable
+
 ## 0.4.0 (2026-04-26)
 
 ### Added

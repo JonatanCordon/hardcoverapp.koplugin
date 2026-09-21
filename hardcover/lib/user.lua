@@ -8,7 +8,10 @@ function User:getId()
   if not user_id then
     local me = Api:me()
     user_id = me.id
-    self.settings:updateSetting(SETTING.USER_ID, user_id)
+    -- only persist a successful lookup (the request fails when offline)
+    if user_id then
+      self.settings:updateSetting(SETTING.USER_ID, user_id)
+    end
   end
 
   return user_id

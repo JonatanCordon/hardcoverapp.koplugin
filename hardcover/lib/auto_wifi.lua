@@ -1,31 +1,41 @@
 local SETTING = require("hardcover/lib/constants/settings")
 
 local Device = require("device")
-local logger = require("logger")
 
 local NetworkMgr = require("ui/network/manager")
 
-local AutoWifi = {
-  connection_pending = false
-}
+local AutoWifi = {}
 AutoWifi.__index = AutoWifi
 
 function AutoWifi:new(o)
   return setmetatable(o, self)
 end
 
+function AutoWifi:canEnableWifi()
+  return self.settings:readSetting(SETTING.ENABLE_WIFI)
+      and not NetworkMgr.pending_connection
+      and Device:hasWifiRestore()
+      and G_reader_settings:nilOrFalse("airplanemode")
+end
+
+-- Whether withWifi will run its callback (wifi is already on, or can be enabled automatically)
+function AutoWifi:canRunWithWifi()
+  if NetworkMgr:isWifiOn() then
+    return true
+  end
+
+  return self:canEnableWifi() and true or false
+end
+
+-- Run callback with wifi enabled. If wifi is off and cannot be enabled automatically,
+-- callback is not called. Use canRunWithWifi() to check this beforehand.
 function AutoWifi:withWifi(callback)
   if NetworkMgr:isWifiOn() then
     callback(false)
     return
   end
 
-  if self.settings:readSetting(SETTING.ENABLE_WIFI)
-      and not NetworkMgr.pending_connection
-      and Device:hasWifiRestore()
-      and G_reader_settings:nilOrFalse("airplanemode") then
-    --logger.warn("HARDCOVER enabling wifi")
-
+  if self:canEnableWifi() then
     local original_on = NetworkMgr.wifi_was_on
 
     NetworkMgr:restoreWifiAsync()
@@ -33,9 +43,6 @@ function AutoWifi:withWifi(callback)
       -- restore original "was on" state to prevent wifi being restored automatically after suspend
       NetworkMgr.wifi_was_on = original_on
       G_reader_settings:saveSetting("wifi_was_on", original_on)
-
-      self.connection_pending = false
-      --logger.warn("HARDCOVER wifi enabled")
 
       callback(true)
 
@@ -50,7 +57,6 @@ function AutoWifi:wifiDisableSilent()
     -- explicitly disable wifi was on
     NetworkMgr.wifi_was_on = false
     G_reader_settings:saveSetting("wifi_was_on", false)
-    --logger.warn("HARDCOVER disabling wifi")
   end)
 end
 

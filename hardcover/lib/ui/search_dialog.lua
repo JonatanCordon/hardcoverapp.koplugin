@@ -9,7 +9,7 @@ local SearchMenu = require("hardcover/lib/ui/search_menu")
 local Size = require("ui/size")
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
-local logger = require("logger")
+local T = require("ffi/util").template
 local _t = require("hardcover/lib/table_util")
 
 local Screen = Device.screen
@@ -35,13 +35,16 @@ function HardcoverSearchDialog:createListItem(book, active_item)
   local title = book.title
   local authors = {}
 
-  if book.contributions.author then
-    table.insert(authors, book.contributions.author)
-  end
+  if type(book.contributions) == "table" then
+    if type(book.contributions.author) == "string" then
+      table.insert(authors, book.contributions.author)
+    end
 
-  if #book.contributions > 0 then
     for _, a in ipairs(book.contributions) do
-      table.insert(authors, a.author.name)
+      local name = _t.dig(a, "author", "name")
+      if name then
+        table.insert(authors, name)
+      end
     end
   end
 
@@ -50,9 +53,9 @@ function HardcoverSearchDialog:createListItem(book, active_item)
   end
 
   if book.users_count then
-    info = book.users_count .. " readers"
+    info = T(_("%1 readers"), book.users_count)
   elseif book.users_read_count then
-    info = book.users_read_count .. " reads"
+    info = T(_("%1 reads"), book.users_read_count)
   end
 
   local active = active_item and (
@@ -71,16 +74,15 @@ function HardcoverSearchDialog:createListItem(book, active_item)
     highlight = active,
   }
 
-  if not book.edition_id and _t.dig(book, "book_series", 1, "position") then
-    result.series = book.book_series[1].series.name
-    if book.book_series[1].position then
-      result.series = result.series .. " #" .. book.book_series[1].position
-    end
+  local series_name = _t.dig(book, "book_series", 1, "series", "name")
+  local series_position = _t.dig(book, "book_series", 1, "position")
+  if not book.edition_id and series_name and series_position then
+    result.series = series_name .. " #" .. series_position
   end
 
-  if book.language and book.language.code2 then
-    if self.series then
-      result.series = " - " .. book.language.code2
+  if _t.dig(book, "language", "code2") then
+    if result.series then
+      result.series = result.series .. " - " .. book.language.code2
     else
       result.series = book.language.language
     end
@@ -88,11 +90,6 @@ function HardcoverSearchDialog:createListItem(book, active_item)
 
   if book.pages then
     result.pages = book.pages
-  end
-
-  if book.book_series.position then
-    result.series = book.book_series.series.name
-    result.series_index = book.book_series.position
   end
 
   if #authors > 0 then
@@ -115,7 +112,7 @@ function HardcoverSearchDialog:createListItem(book, active_item)
     result.filetype = book.filetype
   end
 
-  if book.cached_image.url then
+  if _t.dig(book, "cached_image", "url") then
     result.cover_url = book.cached_image.url
     result.cover_w = book.cached_image.width
     result.cover_h = book.cached_image.height
@@ -157,7 +154,7 @@ function HardcoverSearchDialog:init()
   self.menu = menu_class:new {
     single_line = false,
     multilines_show_more_text = true,
-    title = self.title or "Select book",
+    title = self.title or _("Select book"),
     fullscreen = true,
     item_table = self:parseItems(self.items, self.active_item),
     width = self.width,
@@ -189,9 +186,9 @@ end
 function HardcoverSearchDialog:search()
   local search_dialog
   search_dialog = InputDialog:new {
-    title = "New search",
+    title = _("New search"),
     input = self.search_value,
-    save_button_text = "Search",
+    save_button_text = _("Search"),
     buttons = { {
       {
         text = _("Cancel"),
@@ -229,13 +226,6 @@ function HardcoverSearchDialog:onClose()
     self.close_callback()
   end
 
-  return true
-end
-
-function HardcoverSearchDialog:onTapClose(arg, ges)
-  if ges.pos:notIntersectWith(self.movable.dimen) then
-    self:onClose()
-  end
   return true
 end
 

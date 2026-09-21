@@ -1,21 +1,11 @@
---local HTTPClient = require("httpclient")
-local logger = require("logger")
 local getUrlContent = require("hardcover/vendor/url_content")
 local UIManager = require("ui/uimanager")
 local Trapper = require("ui/trapper")
 
-local ImageLoader = {
-  url_map = {}
-}
-
-function ImageLoader:isLoading()
-  return self.loading == true
-end
+local ImageLoader = {}
 
 local Batch = {
-  load_count = nil,
   loading = false,
-  url_map = {},
   callback = nil
 }
 Batch.__index = Batch
@@ -24,13 +14,13 @@ function Batch:new(o)
   return setmetatable(o or {}, self)
 end
 
-function Batch:data(url)
-  return self.url_map[url]
-end
-
 function Batch:loadImages(urls)
   if self.loading then
     error("batch already in progress")
+  end
+
+  if #urls == 0 then
+    return function() end
   end
 
   self.loading = true
@@ -49,10 +39,6 @@ function Batch:loadImages(urls)
         return getUrlContent(url, 10, 30)
       end)
 
-      --if not completed then
-      --  logger.warn("Aborted")
-      --end
-
       if completed and success then
         self.callback(url, content)
       end
@@ -63,10 +49,6 @@ function Batch:loadImages(urls)
         self.loading = false
       end
     end)
-  end
-
-  if #urls == 0 then
-    self.loading = false
   end
 
   UIManager:nextTick(run_image)

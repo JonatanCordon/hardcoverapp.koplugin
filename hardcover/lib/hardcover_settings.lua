@@ -7,17 +7,24 @@ local SETTING = require("hardcover/lib/constants/settings")
 local HardcoverSettings = {}
 HardcoverSettings.__index = HardcoverSettings
 
+-- A settings file is opened once and shared between plugin instances (file manager and reader),
+-- so that an older instance cannot overwrite newer changes with stale data
+local open_settings = {}
+
 function HardcoverSettings:new(path, ui)
   local o = {}
   setmetatable(o, self)
 
-  self.settings = LuaSettings:open(path)
-  self.ui = ui
-  self.subscribers = {}
+  if not open_settings[path] then
+    open_settings[path] = LuaSettings:open(path)
+  end
+  o.settings = open_settings[path]
+  o.ui = ui
+  o.subscribers = {}
 
   if KoreaderVersion:getNormalizedCurrentVersion() < 202403010000 then
-    if self.settings:readSetting(SETTING.COMPATIBILITY_MODE) == nil then
-      self:updateSetting(SETTING.COMPATIBILITY_MODE, true)
+    if o.settings:readSetting(SETTING.COMPATIBILITY_MODE) == nil then
+      o:updateSetting(SETTING.COMPATIBILITY_MODE, true)
     end
   end
 
@@ -54,13 +61,19 @@ function HardcoverSettings:updateBookSetting(filename, config)
     books[filename] = {}
   end
   local book_setting = books[filename]
-  local original_value = { table.unpack(book_setting) }
+  local original_value = {}
+  for k, v in pairs(book_setting) do
+    original_value[k] = v
+  end
+  -- deletions are applied first, so that they cannot remove values set by the same update
+  if config._delete then
+    for _, name in ipairs(config._delete) do
+      book_setting[name] = nil
+    end
+  end
+
   for k, v in pairs(config) do
-    if k == "_delete" then
-      for _, name in ipairs(v) do
-        book_setting[name] = nil
-      end
-    else
+    if k ~= "_delete" then
       book_setting[k] = v
     end
   end
@@ -68,6 +81,10 @@ function HardcoverSettings:updateBookSetting(filename, config)
   self.settings:flush()
 
   self:notify(SETTING.BOOKS, { filename = filename, config = config }, original_value)
+end
+
+function HardcoverSettings:clearLinkedBook(filename)
+  self:updateBookSetting(filename, { _delete = SETTING.LINKED_BOOK_KEYS })
 end
 
 function HardcoverSettings:updateSetting(key, value)

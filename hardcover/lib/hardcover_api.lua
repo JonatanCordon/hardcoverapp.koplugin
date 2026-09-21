@@ -1,4 +1,3 @@
-local config = require("hardcover_config")
 local logger = require("logger")
 local http = require("socket.http")
 local ltn12 = require("ltn12")
@@ -10,20 +9,35 @@ local NetworkManager = require("ui/network/manager")
 local socketutil = require("socketutil")
 
 local Book = require("hardcover/lib/book")
+local HARDCOVER = require("hardcover/lib/constants/hardcover")
 local VERSION = require("hardcover_version")
 
 local api_url = "https://api.hardcover.app/v1/graphql"
+
+local PLACEHOLDER_TOKEN = "your token here"
+
+local config_loaded, config = pcall(require, "hardcover_config")
+local token = config_loaded and type(config) == "table" and config.token
+local has_token = type(token) == "string" and token ~= "" and token ~= PLACEHOLDER_TOKEN
+
+if not has_token then
+  logger.warn("Hardcover: API token missing. Add it to hardcover_config.lua")
+end
 
 local headers = {
   ["Content-Type"] = "application/json",
   ["User-Agent"] = T("hardcoverapp.koplugin/%1 (https://github.com/billiam/hardcoverapp.koplugin)",
     table.concat(VERSION, ".")),
-  Authorization = "Bearer " .. config.token
+  Authorization = has_token and ("Bearer " .. token) or nil
 }
 
 local HardcoverApi = {
-  enabled = true
+  enabled = has_token
 }
+
+function HardcoverApi:hasToken()
+  return has_token
+end
 
 local book_fragment = [[
 fragment BookParts on books {
@@ -111,8 +125,13 @@ function HardcoverApi:query(query, parameters)
 
   if completed and content then
     local code, response = string.match(content, "^([^:]*):(.*)")
-    if string.find(code, "^%d%d%d") then
-      local data = json.decode(response, json.decode.simple)
+    if code and string.find(code, "^%d%d%d") then
+      local decoded, data = pcall(json.decode, response, json.decode.simple)
+      if not decoded or type(data) ~= "table" then
+        logger.warn("Hardcover: unable to parse response", code)
+        return nil, { completed = false }
+      end
+
       if data.data then
         return data.data
       elseif data.errors or data.error then
@@ -125,6 +144,8 @@ function HardcoverApi:query(query, parameters)
 
         return nil, { errors = err }
       end
+
+      return nil, { completed = false }
     else
       return nil, { completed = false }
     end
@@ -156,7 +177,6 @@ function HardcoverApi:_query(query, parameters)
   socketutil:reset_timeout()
 
   local content = table.concat(sink) -- empty or content accumulated till now
-  --logger.warn(requestBody)
   if code == socketutil.TIMEOUT_CODE or
     code == socketutil.SSL_HANDSHAKE_CODE or
     code == socketutil.SINK_TIMEOUT_CODE
@@ -190,30 +210,32 @@ function HardcoverApi:hydrateBooks(ids, user_id)
     }
   ]] .. book_fragment
 
-  local books = self:query(bookQuery, { ids = ids, userId = user_id })
-  if books then
-    local list = books.books
+  local books, err = self:query(bookQuery, { ids = ids, userId = user_id })
+  if not books then
+    return {}, err
+  end
 
-    if #list > 1 then
-      local id_order = {}
+  local list = books.books or {}
 
-      for i, v in ipairs(ids) do
-        id_order[v] = i
-      end
+  if #list > 1 then
+    local id_order = {}
 
-      -- sort books by original ID order
-      table.sort(list, function(a, b)
-        return id_order[a.book_id] < id_order[b.book_id]
-      end)
+    for i, v in ipairs(ids) do
+      id_order[v] = i
     end
 
-    return list
+    -- sort books by original ID order
+    table.sort(list, function(a, b)
+      return id_order[a.book_id] < id_order[b.book_id]
+    end)
   end
+
+  return list
 end
 
 function HardcoverApi:hydrateBookFromEdition(edition_id, user_id)
   local editionSearch = [[
-    query ($id Int!, $userId: Int!) {
+    query ($id: Int!, $userId: Int!) {
       editions(where: { id: { _eq: $id }}) {
         ...EditionParts
       }
@@ -241,14 +263,18 @@ end
 
 function HardcoverApi:findEditions(book_id, user_id)
   local edition_search = [[
-    query ($id: Int!, $userId: Int!) {
-      editions(where: { book_id: { _eq: $id }, _or: [{reading_format_id: { _is_null: true }}, {reading_format_id: { _neq: 2 }} ]},
+    query ($id: Int!, $userId: Int!, $audiobookFormat: Int!) {
+      editions(where: { book_id: { _eq: $id }, _or: [{reading_format_id: { _is_null: true }}, {reading_format_id: { _neq: $audiobookFormat }} ]},
       order_by: { users_count: desc_nulls_last }) {
         ...EditionParts
       }
     }]] .. edition_fragment
 
-  local editions = self:query(edition_search, { id = book_id, userId = user_id })
+  local editions = self:query(edition_search, {
+    id = book_id,
+    userId = user_id,
+    audiobookFormat = HARDCOVER.READING_FORMAT.AUDIOBOOK
+  })
   if not editions or not editions.editions then
     return {}
   end
@@ -268,31 +294,39 @@ function HardcoverApi:findEditions(book_id, user_id)
       }
     ]]
 
+    -- if this lookup fails, editions are still returned without the read preference
     local read_editions = self:query(read_search, { ids = edition_ids, userId = user_id })
-    if not read_editions then
-      return nil
-    end
     local read_index = {}
-    for _, read in ipairs(read_editions) do
+    for _, read in ipairs(_t.dig(read_editions, "user_books") or {}) do
       read_index[read.edition_id] = true
     end
 
     table.sort(edition_list, function(a, b)
       -- sort by user reads
-      local read_a = read_index[a.id]
-      local read_b = read_index[b.id]
+      local read_a = read_index[a.id] == true
+      local read_b = read_index[b.id] == true
 
       if read_a ~= read_b then
-        return read_a == true
+        return read_a
       end
 
-      if a.reading_format_id ~= b.reading_format_id then
-        return a.reading_format_id == 4
+      -- then prefer ebooks
+      local ebook_a = a.reading_format_id == HARDCOVER.READING_FORMAT.EBOOK
+      local ebook_b = b.reading_format_id == HARDCOVER.READING_FORMAT.EBOOK
+
+      if ebook_a ~= ebook_b then
+        return ebook_a
       end
 
-      if a.users_count ~= b.users_count then
-        return a.users_count > b.users_count
+      -- then by popularity
+      local users_a = tonumber(a.users_count) or 0
+      local users_b = tonumber(b.users_count) or 0
+
+      if users_a ~= users_b then
+        return users_a > users_b
       end
+
+      return a.id < b.id
     end)
   end
 
@@ -310,9 +344,9 @@ function HardcoverApi:search(title, author, userId, page)
       }
     }]]
   local search = title .. " " .. (author or "")
-  local results, error = self:query(query, { query = search, page = page })
-  if error then
-    return nil, error
+  local results, err = self:query(query, { query = search, page = page })
+  if err then
+    return nil, err
   end
 
   if not results or not _t.dig(results, "search", "ids") then
@@ -387,6 +421,10 @@ end
 
 function HardcoverApi:normalizeUserBookRead(user_book_read)
   local user_book = user_book_read.user_book
+  if type(user_book) ~= "table" then
+    return nil
+  end
+
   user_book_read.user_book = nil
   user_book.user_book_reads = { user_book_read }
   return user_book
@@ -405,19 +443,15 @@ function HardcoverApi:getRandomToRead(user_id, limit)
   limit = limit or 10
 
   local read_query = [[
-    query ($userId: Int!) {
-      user_books(where: { status_id: { _eq:1 }, user_id: { _eq: $userId }}) {
+    query ($userId: Int!, $statusId: Int!) {
+      user_books(where: { status_id: { _eq: $statusId }, user_id: { _eq: $userId }}) {
         book_id
       }
     }
   ]]
-  local results, err = self:query(read_query, { userId = user_id })
+  local results, err = self:query(read_query, { userId = user_id, statusId = HARDCOVER.STATUS.TO_READ })
   if not results or not results.user_books then
     return {}, err
-  end
-
-  if not results or not results.user_books then
-    return {}
   end
 
   local ids = _t.map(results.user_books, function(result) return tonumber(result.book_id) end)
@@ -438,7 +472,7 @@ function HardcoverApi:findUserBook(book_id, user_id)
 
   local results, err = self:query(read_query, { id = book_id, userId = user_id })
   if not results or not results.user_books then
-    return {}, err
+    return nil, err
   end
 
   return results.user_books[1]
@@ -499,13 +533,14 @@ function HardcoverApi:findDefaultEdition(book_id, user_id)
     }
   ]] .. user_edition_fragment
   local default_edition_results = self:query(default_edition_query, { bookId = book_id })
-  if default_edition_results then
-    if default_edition_results.books_by_pk.default_ebook_edition then
-      return default_edition_results.books_by_pk.default_ebook_edition
+  local default_book = _t.dig(default_edition_results, "books_by_pk")
+  if type(default_book) == "table" then
+    if type(default_book.default_ebook_edition) == "table" then
+      return default_book.default_ebook_edition
     end
 
-    if default_edition_results.books_by_pk.default_physical_edition then
-      return default_edition_results.books_by_pk.default_physical_edition
+    if type(default_book.default_physical_edition) == "table" then
+      return default_book.default_physical_edition
     end
   end
 
@@ -555,8 +590,8 @@ function HardcoverApi:createRead(user_book_id, edition_id, page, started_at)
   ]]
 
   local result = self:query(query, { id = user_book_id, pages = page, editionId = edition_id, startedAt = started_at })
-  if result and result.update_user_book_read then
-    local user_book_read = result.insert_user_book_read.user_book_read
+  local user_book_read = _t.dig(result, "insert_user_book_read", "user_book_read")
+  if user_book_read then
     return self:normalizeUserBookRead(user_book_read)
   end
 end
@@ -590,15 +625,16 @@ function HardcoverApi:updatePage(user_read_id, edition_id, page, started_at)
   ]]
 
   local result = self:query(query, { id = user_read_id, pages = page, editionId = edition_id, startedAt = started_at })
-  if result and result.update_user_book_read then
-    return self:normalizeUserBookRead(result.update_user_book_read.user_book_read)
+  local user_book_read = _t.dig(result, "update_user_book_read", "user_book_read")
+  if user_book_read then
+    return self:normalizeUserBookRead(user_book_read)
   end
 end
 
 function HardcoverApi:updateUserBook(book_id, status_id, privacy_setting_id, edition_id)
   if not privacy_setting_id then
     local me = self:me()
-    privacy_setting_id = me.account_privacy_setting_id or 1
+    privacy_setting_id = me.account_privacy_setting_id or HARDCOVER.PRIVACY.PUBLIC
   end
 
   local query = [[
@@ -673,9 +709,7 @@ function HardcoverApi:createJournalEntry(object)
   ]]
 
   local result = self:query(query, { object = object })
-  if result then
-    return result.insert_reading_journal.reading_journal
-  end
+  return _t.dig(result, "insert_reading_journal", "reading_journal")
 end
 
 return HardcoverApi

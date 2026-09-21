@@ -3,7 +3,6 @@ local Device = require("device")
 local _ = require("gettext")
 local math = require("math")
 local os = require("os")
-local logger = require("logger")
 
 local T = require("ffi/util").template
 
@@ -45,7 +44,7 @@ function HardcoverMenu:mainMenu()
       return self.enabled
     end,
     text_func = function()
-      return self.settings:bookLinked() and _("Hardcover: " .. ICON.LINK) or _("Hardcover")
+      return self.settings:bookLinked() and (_("Hardcover") .. ": " .. ICON.LINK) or _("Hardcover")
     end,
     sub_item_table_func = function()
       local has_book = self.ui.document and true or false
@@ -64,7 +63,7 @@ function HardcoverMenu:getSubMenuItems(book_view)
           if not title then
             title = self.settings:getLinkedBookId()
           end
-          return _("Linked book: " .. title)
+          return T(_("Linked book: %1"), title)
         else
           return _("Link book")
         end
@@ -75,12 +74,7 @@ function HardcoverMenu:getSubMenuItems(book_view)
       end,
       hold_callback = function(menu_instance)
         if self.settings:bookLinked() then
-          self.settings:updateBookSetting(
-            self.ui.document.file,
-            {
-              _delete = { 'book_id', 'edition_id', 'edition_format', 'pages', 'title' }
-            }
-          )
+          self.settings:clearLinkedBook(self.ui.document.file)
 
           menu_instance:updateItems()
         end
@@ -101,15 +95,14 @@ function HardcoverMenu:getSubMenuItems(book_view)
     book_view and {
       text_func = function()
         local edition_format = self.settings:getLinkedEditionFormat()
-        local title = "Change edition"
 
         if edition_format then
-          title = title .. ": " .. edition_format
+          return T(_("Change edition: %1"), edition_format)
         elseif self.settings:getLinkedEditionId() then
-          return title .. ": physical book"
+          return T(_("Change edition: %1"), _("Physical Book"))
         end
 
-        return _(title)
+        return _("Change edition")
       end,
       enabled_func = function()
         return self.enabled and self.settings:bookLinked()
@@ -118,7 +111,7 @@ function HardcoverMenu:getSubMenuItems(book_view)
         local editions = Api:findEditions(self.settings:getLinkedBookId(), User:getId())
         -- need to show "active" here, and prioritize current edition if available
         self.dialog_manager:buildSearchDialog(
-          "Select edition",
+          _("Select edition"),
           editions,
           {
             edition_id = self.settings:getLinkedEditionId()
@@ -178,15 +171,14 @@ function HardcoverMenu:getSubMenuItems(book_view)
         local version = table.concat(VERSION, ".")
         local new_release_str = ""
         if new_release then
-          new_release_str = " (latest v" .. new_release .. ")"
+          new_release_str = " " .. T(_("(latest v%1)"), new_release)
         end
         local settings_file = DataStorage:getSettingsDir() .. "/" .. "hardcoversync_settings.lua"
 
         UIManager:show(InfoMessage:new {
-          text = [[
+          text = T(_([[
 Hardcover plugin
-v]] .. version .. new_release_str .. [[
-
+v%1%2
 
 Updates book progress and status on Hardcover.app
 
@@ -194,7 +186,7 @@ Project:
 github.com/billiam/hardcoverapp.koplugin
 
 Settings:
-]] .. settings_file,
+%3]]), version, new_release_str, settings_file),
           face = Font:getFace("cfont", 18),
           show_icon = false,
         })
@@ -242,100 +234,45 @@ function HardcoverMenu:getVisibilitySubMenuItems()
   }
 end
 
+function HardcoverMenu:statusMenuItem(icon, label, confirm_text, status)
+  return {
+    text = icon .. " " .. label,
+    enabled_func = function()
+      return self.enabled
+    end,
+    checked_func = function()
+      return self.state.book_status.status_id == status
+    end,
+    callback = function(menu_instance)
+      self.dialog_manager:maybeConfirm({
+        text = confirm_text,
+        ok_callback = function()
+          self.cache:updateBookStatus(self.ui.document.file, status)
+        end,
+        no_confirm_callback = function()
+          menu_instance:updateItems()
+        end
+      })
+    end,
+    radio = true
+  }
+end
+
 function HardcoverMenu:getStatusSubMenuItems()
   return {
+    self:statusMenuItem(ICON.BOOKMARK, _("Want To Read"), _("Mark book as Want To Read?"), HARDCOVER.STATUS.TO_READ),
+    self:statusMenuItem(ICON.OPEN_BOOK, _("Currently Reading"), _("Mark book as Currently Reading?"),
+      HARDCOVER.STATUS.READING),
+    self:statusMenuItem(ICON.CHECKMARK, _("Read"), _("Mark book as Read?"), HARDCOVER.STATUS.FINISHED),
+    self:statusMenuItem(ICON.STOP_CIRCLE, _("Did Not Finish"), _("Mark book as Did Not Finish?"), HARDCOVER.STATUS.DNF),
     {
-      text = _(ICON.BOOKMARK .. " Want To Read"),
-      enabled_func = function()
-        return self.enabled
-      end,
-      checked_func = function()
-        return self.state.book_status.status_id == HARDCOVER.STATUS.TO_READ
-      end,
-      callback = function(menu_instance)
-        self.dialog_manager:maybeConfirm({
-          text = "Mark book as Want To Read?",
-          ok_callback = function()
-            self.cache:updateBookStatus(self.ui.document.file, HARDCOVER.STATUS.TO_READ)
-          end,
-          no_confirm_callback = function()
-            menu_instance:updateItems()
-          end
-        })
-      end,
-      radio = true
-    },
-    {
-      text = _(ICON.OPEN_BOOK .. " Currently Reading"),
-      enabled_func = function()
-        return self.enabled
-      end,
-      checked_func = function()
-        return self.state.book_status.status_id == HARDCOVER.STATUS.READING
-      end,
-      callback = function(menu_instance)
-        self.dialog_manager:maybeConfirm({
-          text = "Mark book as Currently Reading?",
-          ok_callback = function()
-            self.cache:updateBookStatus(self.ui.document.file, HARDCOVER.STATUS.READING)
-          end,
-          no_confirm_callback = function()
-            menu_instance:updateItems()
-          end
-        })
-      end,
-      radio = true
-    },
-    {
-      text = _(ICON.CHECKMARK .. " Read"),
-      enabled_func = function()
-        return self.enabled
-      end,
-      checked_func = function()
-        return self.state.book_status.status_id == HARDCOVER.STATUS.FINISHED
-      end,
-      callback = function(menu_instance)
-        self.dialog_manager:maybeConfirm({
-          text = "Mark book as Read?",
-          ok_callback = function()
-            self.cache:updateBookStatus(self.ui.document.file, HARDCOVER.STATUS.FINISHED)
-          end,
-          no_confirm_callback = function()
-            menu_instance:updateItems()
-          end
-        })
-      end,
-      radio = true
-    },
-    {
-      text = _(ICON.STOP_CIRCLE .. " Did Not Finish"),
-      enabled_func = function()
-        return self.enabled
-      end,
-      checked_func = function()
-        return self.state.book_status.status_id == HARDCOVER.STATUS.DNF
-      end,
-      callback = function(menu_instance)
-        self.dialog_manager:maybeConfirm({
-          text = "Mark book as Did Not Finish?",
-          ok_callback = function()
-            self.cache:updateBookStatus(self.ui.document.file, HARDCOVER.STATUS.DNF)
-          end,
-          no_confirm_callback = function()
-            menu_instance:updateItems()
-          end
-        })
-      end,
-      radio = true,
-    },
-    {
-      text = _(ICON.TRASH .. " Remove"),
+      text = ICON.TRASH .. " " .. _("Remove"),
       enabled_func = function()
         return self.enabled and self.state.book_status.status_id ~= nil
       end,
       callback = function(menu_instance)
         self.dialog_manager:maybeConfirm({
-          text = "Remove current book status?",
+          text = _("Remove current book status?"),
           ok_callback = function()
             local result = Api:removeRead(self.state.book_status.id)
             if result and result.id then
@@ -374,9 +311,9 @@ function HardcoverMenu:getStatusSubMenuItems()
         local remote_pages = self.settings:pages()
         local mapped_page = self.page_mapper:getMappedPage(document_page, document_pages, remote_pages)
 
-        local left_text = "Edition"
+        local left_text = _("Edition")
         if last_hardcover_page > 0 then
-          left_text = left_text .. ": was " .. last_hardcover_page
+          left_text = T(_("Edition: was %1"), last_hardcover_page)
         end
 
         local spinner = UpdateDoubleSpinWidget:new {
@@ -389,7 +326,7 @@ function HardcoverMenu:getStatusSubMenuItems()
           left_step = 1,
           left_hold_step = 20,
 
-          right_text = "Local page",
+          right_text = _("Local page"),
           right_value = document_page,
           right_min = 0,
           right_max = document_pages,
@@ -424,7 +361,7 @@ function HardcoverMenu:getStatusSubMenuItems()
               self.state.book_status = result
               menu_instance:updateItems()
             else
-
+              self.dialog_manager:showError(_("Page could not be updated"))
             end
           end
         }
@@ -456,20 +393,16 @@ function HardcoverMenu:getStatusSubMenuItems()
     },
     {
       text_func = function()
-        local text
         if self.state.book_status.rating then
-          text = "Update rating"
           local whole_star = math.floor(self.state.book_status.rating)
           local star_string = string.rep(ICON.STAR, whole_star)
           if self.state.book_status.rating - whole_star > 0 then
             star_string = star_string .. ICON.HALF_STAR
           end
-          text = text .. ": " .. star_string
-        else
-          text = "Set rating"
+          return T(_("Update rating: %1"), star_string)
         end
 
-        return _(text)
+        return _("Set rating")
       end,
       enabled_func = function()
         return self.enabled and self.state.book_status.id ~= nil
@@ -493,7 +426,7 @@ function HardcoverMenu:getStatusSubMenuItems()
               self.state.book_status = result
               menu_instance:updateItems()
             else
-              self.dialog_magager:showError("Rating could not be saved")
+              self.dialog_manager:showError(_("Rating could not be saved"))
             end
           end
         }
@@ -524,7 +457,7 @@ end
 function HardcoverMenu:getTrackingSubMenuItems()
   return {
     {
-      text = "Update periodically",
+      text = _("Update periodically"),
       radio = true,
       checked_func = function()
         return self.settings:trackByTime()
@@ -535,7 +468,7 @@ function HardcoverMenu:getTrackingSubMenuItems()
     },
     {
       text_func = function()
-        return "Every " .. self.settings:trackFrequency() .. " minutes"
+        return T(_("Every %1 minutes"), self.settings:trackFrequency())
       end,
       enabled_func = function()
         return self.settings:trackByTime()
@@ -560,7 +493,7 @@ function HardcoverMenu:getTrackingSubMenuItems()
       keep_menu_open = true
     },
     {
-      text = "Update by progress",
+      text = _("Update by progress"),
       radio = true,
       checked_func = function()
         return self.settings:trackByProgress()
@@ -571,7 +504,7 @@ function HardcoverMenu:getTrackingSubMenuItems()
     },
     {
       text_func = function()
-        return "Every " .. self.settings:trackPercentageInterval() .. " percent completed"
+        return T(_("Every %1 percent completed"), self.settings:trackPercentageInterval())
       end,
       enabled_func = function()
         return self.settings:trackByProgress()
@@ -601,7 +534,7 @@ end
 function HardcoverMenu:getSettingsSubMenuItems()
   return {
     {
-      text = "Automatically link by ISBN",
+      text = _("Automatically link by ISBN"),
       checked_func = function()
         return self.settings:readSetting(SETTING.LINK_BY_ISBN) == true
       end,
@@ -611,7 +544,7 @@ function HardcoverMenu:getSettingsSubMenuItems()
       end
     },
     {
-      text = "Automatically link by Hardcover identifiers",
+      text = _("Automatically link by Hardcover identifiers"),
       checked_func = function()
         return self.settings:readSetting(SETTING.LINK_BY_HARDCOVER) == true
       end,
@@ -621,7 +554,7 @@ function HardcoverMenu:getSettingsSubMenuItems()
       end
     },
     {
-      text = "Automatically link by title and author",
+      text = _("Automatically link by title and author"),
       checked_func = function()
         return self.settings:readSetting(SETTING.LINK_BY_TITLE) == true
       end,
@@ -632,15 +565,13 @@ function HardcoverMenu:getSettingsSubMenuItems()
       separator = true
     },
     {
-      text_func = function()
-        return "Track progress settings: " .. ""
-      end,
+      text = _("Track progress settings"),
       sub_item_table_func = function()
         return self:getTrackingSubMenuItems()
       end,
     },
     {
-      text = "Always track progress by default",
+      text = _("Always track progress by default"),
       checked_func = function()
         return self.settings:readSetting(SETTING.ALWAYS_SYNC) == true
       end,
@@ -650,7 +581,7 @@ function HardcoverMenu:getSettingsSubMenuItems()
       end,
     },
     {
-      text = "Enable wifi on demand",
+      text = _("Enable wifi on demand"),
       checked_func = function()
         return self.settings:readSetting(SETTING.ENABLE_WIFI) == true
       end,
@@ -663,7 +594,7 @@ function HardcoverMenu:getSettingsSubMenuItems()
       end
     },
     {
-      text = "Confirm changes to book read status",
+      text = _("Confirm changes to book read status"),
       checked_func = function()
         return self.settings:menuConfirm()
       end,
@@ -673,7 +604,7 @@ function HardcoverMenu:getSettingsSubMenuItems()
       end
     },
     {
-      text = "Compatibility mode",
+      text = _("Compatibility mode"),
       checked_func = function()
         return self.settings:compatibilityMode()
       end,
@@ -683,9 +614,9 @@ function HardcoverMenu:getSettingsSubMenuItems()
       end,
       hold_callback = function()
         UIManager:show(InfoMessage:new {
-          text = [[Disable fancy menu for book and edition search results.
+          text = _([[Disable fancy menu for book and edition search results.
 
-May improve compatibility for some versions of KOReader]],
+May improve compatibility for some versions of KOReader]]),
         })
       end
     }

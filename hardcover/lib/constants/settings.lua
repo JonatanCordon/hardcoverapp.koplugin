@@ -19,5 +19,7 @@ local Settings = {
 }
 
 Settings.AUTOLINK_OPTIONS = { Settings.LINK_BY_HARDCOVER, Settings.LINK_BY_ISBN, Settings.LINK_BY_TITLE }
+-- per-book settings describing the linked Hardcover book
+Settings.LINKED_BOOK_KEYS = { "book_id", "edition_id", "edition_format", "pages", "title" }
 
 return Settings

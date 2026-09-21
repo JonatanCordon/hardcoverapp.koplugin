@@ -81,7 +81,7 @@ function DialogManager:buildSearchDialog(title, items, active_item, book_callbac
 end
 
 function DialogManager:confirm(options)
-  options.text = options.text or "Are you sure"
+  options.text = options.text or _("Are you sure?")
 
   UIManager:show(ConfirmBox:new(options))
 end
@@ -140,8 +140,8 @@ function DialogManager:buildBookListDialog(title, items, icon_callback, disable_
 end
 
 function DialogManager:updateSearchResults(search)
-  local books, error = Api:findBooks(search, nil, User:getId())
-  if error then
+  local books, err = Api:findBooks(search, nil, User:getId())
+  if err then
     if not Api.enabled then
       UIManager:close(self.search_dialog)
     end
@@ -172,7 +172,8 @@ function DialogManager:journalEntryForm(text, document, page, remote_pages, mapp
   end
 
   mapped_page = mapped_page or self.page_mapper:getMappedPage(page, document:getPageCount(), remote_pages)
-  local wifi_was_off = false
+  -- whether wifi was enabled for this dialog, and should be disabled again afterward
+  local disable_wifi_after = false
   local dialog
   dialog = JournalDialog:new {
     input = text,
@@ -185,20 +186,22 @@ function DialogManager:journalEntryForm(text, document, page, remote_pages, mapp
     save_dialog_callback = function(book_data)
       local api_data = mapJournalData(book_data)
       local result = Api:createJournalEntry(api_data)
+      -- the entry type can be changed in the dialog, so use the saved value
+      local is_quote = book_data.event_type == "quote"
       if result then
         UIManager:nextTick(function()
           UIManager:close(dialog)
 
-          if wifi_was_off then
+          if disable_wifi_after then
             UIManager:nextTick(function()
               self.wifi:wifiDisablePrompt()
             end)
           end
         end)
 
-        return true, _(event_type .. " saved")
+        return true, is_quote and _("Quote saved") or _("Note saved")
       else
-        return false, _(event_type .. " could not be saved")
+        return false, is_quote and _("Quote could not be saved") or _("Note could not be saved")
       end
     end,
     select_edition_callback = function()
@@ -207,7 +210,7 @@ function DialogManager:journalEntryForm(text, document, page, remote_pages, mapp
 
       local editions = Api:findEditions(self.settings:getLinkedBookId(), User:getId())
       self:buildSearchDialog(
-        "Select edition",
+        _("Select edition"),
         editions,
         { edition_id = dialog.edition_id },
         function(edition)
@@ -225,7 +228,7 @@ function DialogManager:journalEntryForm(text, document, page, remote_pages, mapp
     end,
 
     close_callback = function()
-      if wifi_was_off then
+      if disable_wifi_after then
         UIManager:nextTick(function()
           self.wifi:wifiDisablePrompt()
         end)
@@ -236,7 +239,7 @@ function DialogManager:journalEntryForm(text, document, page, remote_pages, mapp
   dialog._input_widget:scrollToBottom()
 
   self.wifi:wifiPrompt(function(wifi_enabled)
-    wifi_was_off = wifi_enabled
+    disable_wifi_after = wifi_enabled
 
     UIManager:show(dialog)
     dialog:onShowKeyboard()

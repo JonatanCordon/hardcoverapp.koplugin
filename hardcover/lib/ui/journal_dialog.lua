@@ -13,25 +13,26 @@ local ToggleSwitch = require("ui/widget/toggleswitch")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
-local logger = require("logger")
+local T = require("ffi/util").template
+
+local HARDCOVER = require("hardcover/lib/constants/hardcover")
 
 local JOURNAL_NOTE = "note"
 local JOURNAL_QUOTE = "quote"
 
 local JournalDialog = InputDialog:extend {
   allow_newline = true,
-  results = {},
-  title = "Create journal entry",
+  title = _("Create journal entry"),
   padding = 10,
 
   event_type = JOURNAL_NOTE,
   pages = _("???"),
   page = nil,
   edition_id = nil,
-  edition_type = nil,
-  tags = {},
-  hidden_tags = {},
-  privacy_setting_id = 1,
+  edition_format = nil,
+  tags = nil,
+  hidden_tags = nil,
+  privacy_setting_id = HARDCOVER.PRIVACY.PUBLIC,
   select_edition_callback = nil
 }
 
@@ -91,7 +92,7 @@ function JournalDialog:init()
   journal_type:setPosition(self.event_type == JOURNAL_NOTE and 1 or 2)
 
   local privacy_label = TextWidget:new {
-    text = "Privacy: ",
+    text = _("Privacy:") .. " ",
     face = Font:getFace("cfont", 16)
   }
 
@@ -99,7 +100,7 @@ function JournalDialog:init()
   privacy_switch = ToggleSwitch:new {
     width = self.width - 40 - privacy_label:getWidth(),
     toggle = { _("Public"), _("Follows"), _("Private") },
-    values = { 1, 2, 3 },
+    values = { HARDCOVER.PRIVACY.PUBLIC, HARDCOVER.PRIVACY.FOLLOWS, HARDCOVER.PRIVACY.PRIVATE },
     alternate = false,
     config = self,
     callback = function(position)
@@ -118,7 +119,7 @@ function JournalDialog:init()
 
   self.tag_field = InputText:new {
     width = self.width - Size.padding.default - Size.border.inputtext - 30,
-    input = table.concat(self.tags, ", "),
+    input = table.concat(self.tags or {}, ", "),
     focused = false,
     show_parent = self,
     parent = self,
@@ -127,7 +128,7 @@ function JournalDialog:init()
   }
   self.hidden_tag_field = InputText:new {
     width = self.width - Size.padding.default - Size.border.inputtext - 30,
-    input = table.concat(self.hidden_tags, ", "),
+    input = table.concat(self.hidden_tags or {}, ", "),
     focused = false,
     show_parent = self,
     parent = self,
@@ -138,16 +139,17 @@ function JournalDialog:init()
   self.page_button = Button:new {
     text = "page",
     text_func = function()
-      return _("page " .. self.page .. " of " .. self.pages)
+      return T(_("page %1 of %2"), self.page or 0, self.pages)
     end,
     width = (self.width - 10 - 30) / 2,
     text_font_size = 16,
     bordersize = Size.border.thin,
     callback = function()
       local spinner = SpinWidget:new {
-        value = self.page,
+        value = self.page or 0,
         value_min = 0,
-        value_max = self.pages,
+        -- page count is unknown when no edition has been selected
+        value_max = tonumber(self.pages) or math.max(self.page or 0, 9999),
         value_step = 1,
         value_hold_step = 20,
         ok_text = _("Set page"),
@@ -165,7 +167,7 @@ function JournalDialog:init()
   self.edition_button = Button:new {
     text = "edition",
     text_func = function()
-      return self.edition_format or "Physical Book"
+      return self.edition_format or _("Physical Book")
     end,
     width = (self.width - 10 - 30) / 2,
     text_font_size = 16,
