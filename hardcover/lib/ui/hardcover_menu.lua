@@ -6,15 +6,12 @@ local os = require("os")
 
 local T = require("ffi/util").template
 
-local Font = require("ui/font")
+local NetworkManager = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 
-local UpdateDoubleSpinWidget = require("hardcover/lib/ui/update_double_spin_widget")
 local InfoMessage = require("ui/widget/infomessage")
-local SpinWidget = require("ui/widget/spinwidget")
 
 local Api = require("hardcover/lib/hardcover_api")
-local Github = require("hardcover/lib/github")
 local User = require("hardcover/lib/user")
 local _t = require("hardcover/lib/table_util")
 
@@ -167,7 +164,18 @@ function HardcoverMenu:getSubMenuItems(book_view)
     {
       text = _("About"),
       callback = function()
-        local new_release = Github:newestRelease()
+        local Font = require("ui/font")
+        local Github = require("hardcover/lib/github")
+
+        local new_release
+        if NetworkManager:isConnected() then
+          -- the release check blocks the UI, so show a message meanwhile
+          local checking = InfoMessage:new { text = _("Checking for updates…") }
+          UIManager:show(checking)
+          UIManager:forceRePaint()
+          new_release = Github:newestRelease()
+          UIManager:close(checking)
+        end
         local version = table.concat(VERSION, ".")
         local new_release_str = ""
         if new_release then
@@ -316,6 +324,7 @@ function HardcoverMenu:getStatusSubMenuItems()
           left_text = T(_("Edition: was %1"), last_hardcover_page)
         end
 
+        local UpdateDoubleSpinWidget = require("hardcover/lib/ui/update_double_spin_widget")
         local spinner = UpdateDoubleSpinWidget:new {
           ok_always_enabled = true,
 
@@ -410,6 +419,7 @@ function HardcoverMenu:getStatusSubMenuItems()
       callback = function(menu_instance)
         local rating = self.state.book_status.rating
 
+        local SpinWidget = require("ui/widget/spinwidget")
         local spinner = SpinWidget:new {
           ok_always_enabled = rating == nil,
           value = rating or 2.5,
@@ -474,6 +484,7 @@ function HardcoverMenu:getTrackingSubMenuItems()
         return self.settings:trackByTime()
       end,
       callback = function(menu_instance)
+        local SpinWidget = require("ui/widget/spinwidget")
         local spinner = SpinWidget:new {
           value = self.settings:trackFrequency(),
           value_min = 1,
@@ -510,6 +521,7 @@ function HardcoverMenu:getTrackingSubMenuItems()
         return self.settings:trackByProgress()
       end,
       callback = function(menu_instance)
+        local SpinWidget = require("ui/widget/spinwidget")
         local spinner = SpinWidget:new {
           value = self.settings:trackPercentageInterval(),
           value_min = 1,

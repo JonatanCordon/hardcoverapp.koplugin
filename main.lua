@@ -90,7 +90,9 @@ function HardcoverApp:init()
     pos = nil,
     search_results = {},
     book_status = {},
-    page_update_pending = false
+    -- latest mapped page which has not been sent to Hardcover yet
+    unsent_page = nil,
+    page_sending = false
   }
   self.settings = HardcoverSettings:new(
     ("%s/%s"):format(DataStorage:getSettingsDir(), "hardcoversync_settings.lua"),
@@ -269,6 +271,7 @@ function HardcoverApp:onSettingsChanged(field, change, original_value)
         end
       else
         self:cancelPendingUpdates()
+        self.state.unsent_page = nil
       end
     end
 
@@ -285,52 +288,109 @@ function HardcoverApp:onSettingsChanged(field, change, original_value)
   end
 end
 
-function HardcoverApp:_handlePageUpdate(filename, mapped_page, immediate, callback)
-  self.state.page_update_pending = false
-
-  if not self:syncFileUpdates(filename) then
-    return
-  end
-
+function HardcoverApp:_currentRead()
   if self.state.book_status.status_id ~= HARDCOVER.STATUS.READING then
     return
   end
 
   local reads = self.state.book_status.user_book_reads
-  local current_read = reads and reads[#reads]
+  return reads and reads[#reads]
+end
+
+-- Record a page to send to Hardcover. It is kept until a request succeeds, so that
+-- updates are not lost when offline, suspended or when a request fails
+function HardcoverApp:queuePage(filename, mapped_page)
+  if not mapped_page or not self:syncFileUpdates(filename) or not self:_currentRead() then
+    return false
+  end
+
+  self.state.unsent_page = mapped_page
+  return true
+end
+
+-- Send the unsent page, if any
+--
+-- wake_wifi: allow wifi to be enabled automatically for this update
+-- immediate: send now (blocking) instead of in the background
+function HardcoverApp:sendUnsentPage(wake_wifi, immediate, callback)
+  local page = self.state.unsent_page
+  local current_read = self:_currentRead()
+
   if not current_read then
+    self.state.unsent_page = nil
+  end
+
+  if not page or not current_read or self.state.page_sending then
+    if callback then
+      callback()
+    end
     return
   end
 
-  local immediate_update = function()
+  if page == current_read.progress_pages then
+    self.state.unsent_page = nil
+    if callback then
+      callback(self.state.book_status)
+    end
+    return
+  end
+
+  if not NetworkManager:isConnected() and not (wake_wifi and self.wifi:canRunWithWifi()) then
+    -- keep the page until a connection is available
+    if callback then
+      callback()
+    end
+    return
+  end
+
+  local send = function()
     self.wifi:withWifi(function()
-      local result = Api:updatePage(current_read.id, current_read.edition_id, mapped_page, current_read.started_at)
-      if result then
-        self.state.book_status = result
+      if self.state.page_sending then
+        return
       end
+
+      self.state.page_sending = true
+      local result = Api:updatePage(current_read.id, current_read.edition_id, page, current_read.started_at)
+      self.state.page_sending = false
+
+      if result then
+        if self.state.unsent_page == page then
+          self.state.unsent_page = nil
+        end
+        -- the book may have been closed while waiting for wifi
+        if self.state.book_status.id == result.id then
+          self.state.book_status = result
+        end
+      end
+
       if callback then
         callback(result)
       end
     end)
   end
 
-  local trapped_update = function()
-    Trapper:wrap(immediate_update)
-  end
-
   if immediate then
-    immediate_update()
+    send()
   else
-    UIManager:scheduleIn(1, trapped_update)
+    UIManager:scheduleIn(1, function()
+      Trapper:wrap(send)
+    end)
   end
+end
+
+-- Periodic updates do not enable wifi: waking the radio every few minutes is
+-- expensive on e-readers. Pages are sent when a connection becomes available,
+-- on resume, and when the document is closed
+function HardcoverApp:_sendThrottledPage()
+  self:sendUnsentPage(false)
 end
 
 function HardcoverApp:initializePageUpdate()
   local track_frequency = math.max(math.min(self.settings:trackFrequency(), 120), 1) * 60
 
-  self._throttledHandlePageUpdate, self._cancelPageUpdate = throttle(
+  self._throttledSendPage, self._cancelPageSend = throttle(
     track_frequency,
-    HardcoverApp._handlePageUpdate
+    HardcoverApp._sendThrottledPage
   )
 
   self.onPageUpdate, self._cancelPageUpdateEvent = debounce(2, HardcoverApp.pageUpdateEvent)
@@ -343,15 +403,16 @@ function HardcoverApp:pageUpdateEvent(page)
   if not (self.state.book_status.id and self.settings:syncEnabled()) then
     return
   end
+  local filename = self.ui.document.file
   local document_pages = self.ui.document:getPageCount()
   local remote_pages = self.settings:pages()
 
   if self.settings:trackByTime() then
     local mapped_page = self.page_mapper:getMappedPage(page, document_pages, remote_pages)
 
-    -- set before calling: an immediate (unthrottled) update will clear it again
-    self.state.page_update_pending = true
-    self:_throttledHandlePageUpdate(self.ui.document.file, mapped_page)
+    if self:queuePage(filename, mapped_page) then
+      self:_throttledSendPage()
+    end
   elseif self.settings:trackByProgress() and self.state.last_page then
     local percent_interval = self.settings:trackPercentageInterval()
 
@@ -370,16 +431,16 @@ function HardcoverApp:pageUpdateEvent(page)
     local last_compare = math.floor(previous_percent * 100 / percent_interval)
     local current_compare = math.floor(current_percent * 100 / percent_interval)
 
-    if last_compare ~= current_compare then
-      self:_handlePageUpdate(self.ui.document.file, mapped_page)
+    -- progress milestones are infrequent, so these may enable wifi
+    if last_compare ~= current_compare and self:queuePage(filename, mapped_page) then
+      self:sendUnsentPage(true)
     end
   end
 end
 
 function HardcoverApp:onPosUpdate(_, page)
-  if self.state.process_page_turns then
-    self:pageUpdateEvent(page)
-  end
+  -- scroll mode: share the page update debounce
+  self:onPageUpdate(page)
 end
 
 function HardcoverApp:onUpdatePos()
@@ -396,37 +457,28 @@ function HardcoverApp:onReaderReady()
   end
 end
 
+-- Cancel scheduled work. Unsent pages are kept so they can be sent later
 function HardcoverApp:cancelPendingUpdates()
-  if self._cancelPageUpdate then
-    self:_cancelPageUpdate()
+  if self._cancelPageSend then
+    self:_cancelPageSend()
   end
 
   if self._cancelPageUpdateEvent then
     self:_cancelPageUpdateEvent()
   end
-
-  self.state.page_update_pending = false
 end
 
 function HardcoverApp:onDocumentClose()
   UIManager:unschedule(self.startReadCache)
 
-  -- read before cancelling, which clears the pending flag
-  local update_pending = self.state.page_update_pending
-
   self:cancelPendingUpdates()
   self.state.read_cache_started = false
-  self.state.process_page_turns = false
 
-  if not self.state.book_status.id and not self.settings:syncEnabled() then
-    return
+  if self.state.unsent_page and self.ui.document then
+    self:sendUnsentPage(true, true)
   end
 
-  if update_pending then
-    self:updatePageNow()
-  end
-
-  self.state.page_update_pending = false
+  self.state.unsent_page = nil
   self.state.book_status = {}
   self.state.page_map = nil
 end
@@ -439,8 +491,17 @@ function HardcoverApp:onSuspend()
 end
 
 function HardcoverApp:onResume()
-  if self.settings:readSetting(SETTING.ENABLE_WIFI) and self.ui.document and self.settings:syncEnabled() then
+  if not (self.ui.document and self.settings:syncEnabled()) then
+    return
+  end
+
+  if self.settings:readSetting(SETTING.ENABLE_WIFI) then
     UIManager:scheduleIn(2, self.startReadCache, self)
+  end
+
+  if self.state.unsent_page then
+    -- send progress from before the device was suspended
+    self:sendUnsentPage(true)
   end
 end
 
@@ -450,7 +511,12 @@ function HardcoverApp:updatePageNow(callback)
     self.ui.document:getPageCount(),
     self.settings:pages()
   )
-  self:_handlePageUpdate(self.ui.document.file, mapped_page, true, callback)
+
+  if self:queuePage(self.ui.document.file, mapped_page) then
+    self:sendUnsentPage(true, true, callback)
+  elseif callback then
+    callback()
+  end
 end
 
 function HardcoverApp:onNetworkDisconnecting()
@@ -458,23 +524,27 @@ function HardcoverApp:onNetworkDisconnecting()
     return
   end
 
-  -- read before cancelling, which clears the pending flag
-  local update_pending = self.state.page_update_pending
-
   self:cancelPendingUpdates()
 
   Scheduler:clear()
   self.state.read_cache_started = false
 
-  if update_pending and self.ui.document and self.state.book_status.id and self.settings:syncEnabled() and self.settings:trackByTime() then
-    self:updatePageNow()
+  if self.state.unsent_page and self.ui.document and self.settings:syncEnabled() then
+    self:sendUnsentPage(false, true)
   end
-  self.state.page_update_pending = false
 end
 
 function HardcoverApp:onNetworkConnected()
-  if self.ui.document and self.settings:syncEnabled() and not self.state.read_cache_started then
+  if not (self.ui.document and self.settings:syncEnabled()) then
+    return
+  end
+
+  if not self.state.read_cache_started then
     self:startReadCache()
+  end
+
+  if self.state.unsent_page then
+    self:sendUnsentPage(false)
   end
 end
 
@@ -504,9 +574,7 @@ function HardcoverApp:onEndOfBook()
   end
 
   local marker = function()
-    local book_id = self.settings:readBookSetting(file_path, "book_id")
-    local user_book = Api:findUserBook(book_id, User:getId()) or {}
-    self.cache:updateBookStatus(file_path, HARDCOVER.STATUS.FINISHED, user_book.privacy_setting_id)
+    self.cache:updateBookStatus(file_path, HARDCOVER.STATUS.FINISHED)
   end
 
   if mark_read == 'later' then
@@ -551,9 +619,7 @@ function HardcoverApp:onDocSettingsItemsChanged(file, doc_settings)
 
   if status then
     self.wifi:withWifi(function()
-      local book_id = self.settings:readBookSetting(file, "book_id")
-      local user_book = Api:findUserBook(book_id, User:getId()) or {}
-      self.cache:updateBookStatus(file, status, user_book.privacy_setting_id)
+      self.cache:updateBookStatus(file, status)
 
       self:showStatusSaveResult()
     end)
@@ -629,15 +695,15 @@ function HardcoverApp:startReadCache()
           if self.settings:bookLinked() and self.settings:syncEnabled() then
             return restart(2)
           end
+
+          -- Not linked (yet): finish this job instead of leaving it pending.
+          -- If autolinking completes later, linking the book fetches its status
+          success()
         end
       end)
     end,
 
-    function()
-      if self.settings:syncEnabled() then
-        self.state.process_page_turns = true
-      end
-    end,
+    nil,
 
     function()
       if NetworkManager:isConnected() then

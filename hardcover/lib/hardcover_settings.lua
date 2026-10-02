@@ -37,11 +37,7 @@ end
 
 function HardcoverSettings:readBookSettings(filename)
   local books = self.settings:readSetting("books")
-  if not books then
-    return {}
-  end
-
-  return books[filename]
+  return books and books[filename] or {}
 end
 
 function HardcoverSettings:readBookSetting(filename, key)

@@ -1,3 +1,4 @@
+local _ = require("gettext")
 local logger = require("logger")
 local http = require("socket.http")
 local ltn12 = require("ltn12")
@@ -6,6 +7,8 @@ local _t = require("hardcover/lib/table_util")
 local T = require("ffi/util").template
 local Trapper = require("ui/trapper")
 local NetworkManager = require("ui/network/manager")
+local UIManager = require("ui/uimanager")
+local InfoMessage = require("ui/widget/infomessage")
 local socketutil = require("socketutil")
 
 local Book = require("hardcover/lib/book")
@@ -112,12 +115,36 @@ function HardcoverApi:me()
   return {}
 end
 
+local loading_message
+
+-- Requests made outside of Trapper:wrap block the UI until they complete, so display a
+-- message meanwhile. It is closed after the current UI action, so that consecutive
+-- requests share a single message (and e-ink refresh)
+local function showLoadingMessage()
+  if loading_message or coroutine.running() then
+    return
+  end
+
+  loading_message = InfoMessage:new {
+    text = _("Contacting Hardcover…"),
+  }
+  UIManager:show(loading_message)
+  UIManager:forceRePaint()
+
+  UIManager:nextTick(function()
+    UIManager:close(loading_message)
+    loading_message = nil
+  end)
+end
+
 function HardcoverApi:query(query, parameters)
   if not NetworkManager:isConnected() or not self.enabled then
     return
   end
 
-  local completed, success, content
+  showLoadingMessage()
+
+  local completed, content
 
   completed, content = Trapper:dismissableRunInSubprocess(function()
     return self:_query(query, parameters)
@@ -262,11 +289,15 @@ function HardcoverApi:findBookBySlug(slug, user_id)
 end
 
 function HardcoverApi:findEditions(book_id, user_id)
+  -- user books are fetched in the same request, to prefer editions the user has read
   local edition_search = [[
     query ($id: Int!, $userId: Int!, $audiobookFormat: Int!) {
       editions(where: { book_id: { _eq: $id }, _or: [{reading_format_id: { _is_null: true }}, {reading_format_id: { _neq: $audiobookFormat }} ]},
       order_by: { users_count: desc_nulls_last }) {
         ...EditionParts
+      }
+      user_books(where: { book_id: { _eq: $id }, user_id: { _eq: $userId }}) {
+        edition_id
       }
     }]] .. edition_fragment
 
@@ -282,23 +313,11 @@ function HardcoverApi:findEditions(book_id, user_id)
 
   if #edition_list > 1 then
     -- prefer editions with user reads
-    local edition_ids = _t.map(edition_list, function(edition)
-      return edition.id
-    end)
-
-    local read_search = [[
-      query ($ids: [Int!], $userId: Int!) {
-        user_books(where: { edition_id: { _in: $ids }, user_id: { _eq: $userId }}) {
-          edition_id
-        }
-      }
-    ]]
-
-    -- if this lookup fails, editions are still returned without the read preference
-    local read_editions = self:query(read_search, { ids = edition_ids, userId = user_id })
     local read_index = {}
-    for _, read in ipairs(_t.dig(read_editions, "user_books") or {}) do
-      read_index[read.edition_id] = true
+    for _, read in ipairs(editions.user_books or {}) do
+      if read.edition_id then
+        read_index[read.edition_id] = true
+      end
     end
 
     table.sort(edition_list, function(a, b)
@@ -485,44 +504,21 @@ function HardcoverApi:findDefaultEdition(book_id, user_id)
   -- 3. default ebook edition
   -- 4. default physical edition
   -- 5. most read book edition
-  local user_edition_fragment = [[
-    fragment UserEditionParts on editions {
-      id
-      edition_format
-      reading_format_id
-      pages
-    }
-  ]]
-  local user_book_query = [[
+  --
+  -- All candidates are fetched in a single request
+  local query = [[
     query ($bookId: Int!, $userId: Int!) {
       user_books(limit: 1, where: { book_id: { _eq: $bookId}, user_id: { _eq: $userId }}) {
         edition {
           ...UserEditionParts
         }
-        user_book_reads(limit: 1, order_by: {id: asc}) {
+        user_book_reads(limit: 1, order_by: {id: desc}) {
           edition {
             ...UserEditionParts
           }
         }
       }
-    }
-  ]] .. user_edition_fragment
-
-  local user_book_results = self:query(user_book_query, { bookId = book_id, userId = user_id })
-  if user_book_results then
-    local user_book = _t.dig(user_book_results, "user_books", 1)
-    if user_book then
-      local read_edition = _t.dig(user_book, "user_book_reads", 1, "edition")
-      if read_edition then
-        return read_edition
-      end
-      return user_book.edition
-    end
-  end
-
-  local default_edition_query = [[
-    query ($bookId: Int!) {
-     books_by_pk(id: $bookId) {
+      books_by_pk(id: $bookId) {
         default_physical_edition {
           ...UserEditionParts
         }
@@ -530,22 +526,6 @@ function HardcoverApi:findDefaultEdition(book_id, user_id)
           ...UserEditionParts
         }
       }
-    }
-  ]] .. user_edition_fragment
-  local default_edition_results = self:query(default_edition_query, { bookId = book_id })
-  local default_book = _t.dig(default_edition_results, "books_by_pk")
-  if type(default_book) == "table" then
-    if type(default_book.default_ebook_edition) == "table" then
-      return default_book.default_ebook_edition
-    end
-
-    if type(default_book.default_physical_edition) == "table" then
-      return default_book.default_physical_edition
-    end
-  end
-
-  local edition_query = [[
-    query ($bookId: Int!) {
       editions(
         limit: 1
         where: {book_id: {_eq: $bookId}}
@@ -554,10 +534,33 @@ function HardcoverApi:findDefaultEdition(book_id, user_id)
         ...UserEditionParts
       }
     }
-  ]] .. user_edition_fragment
-  local edition_results = self:query(edition_query, { bookId = book_id })
-  if edition_results then
-    return _t.dig(edition_results, "editions", 1)
+
+    fragment UserEditionParts on editions {
+      id
+      edition_format
+      reading_format_id
+      pages
+    }
+  ]]
+
+  local results = self:query(query, { bookId = book_id, userId = user_id })
+  if not results then
+    return
+  end
+
+  local candidates = {
+    _t.dig(results, "user_books", 1, "user_book_reads", 1, "edition"),
+    _t.dig(results, "user_books", 1, "edition"),
+    _t.dig(results, "books_by_pk", "default_ebook_edition"),
+    _t.dig(results, "books_by_pk", "default_physical_edition"),
+    _t.dig(results, "editions", 1),
+  }
+
+  -- candidates may be nil, so ipairs cannot be used
+  for i = 1, 5 do
+    if type(candidates[i]) == "table" then
+      return candidates[i]
+    end
   end
 end
 

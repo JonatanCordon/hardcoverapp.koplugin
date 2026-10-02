@@ -131,6 +131,9 @@ minute. If you don't need updates this frequently, and to preserve battery, you 
 You can also choose to update based on your percentage progress through a book. With this option, an update will be sent
 when you cross a percentage threshold (for example, every 10% completed).
 
+If an update cannot be sent (for example while offline), your latest page is kept and sent once a connection is
+available, when the device resumes from sleep, or when the document is closed.
+
 ### Always track progress by default
 
 When always track progress is enabled, new documents will have the [track progress](#automatically-track-progress)
@@ -144,6 +147,10 @@ Books still must be linked (manually or automatically) to send updates to Hardco
 On some devices, wifi can be enabled on demand without interruption. When this feature is enabled, wifi will be enabled
 automatically before some types of background API requests (namely updating the initial application cache, and updating
 your reading progress), and then disabled afterward.
+
+To save battery, periodic (time based) progress updates do not enable wifi on their own. While wifi is off, your latest
+page is sent when wifi is next connected, when the device resumes from sleep, or when the document is closed. Progress
+based updates (every N percent) still enable wifi when a threshold is crossed.
 
 This can improve battery life significantly on some devices, particularly with infrequent page updates.
 

@@ -312,6 +312,30 @@ describe("PageMapper", function()
         assert.are.equal(0.25, percent)
         assert.are.equal(50, page)
       end)
+
+      it("returns the last remote page after the last labeled page", function()
+        local page_map = PageMapper:new {
+          state = {},
+          ui = ui(map)
+        }
+
+        local percent, page = page_map:getRemotePagePercent(35, 40, 250)
+
+        assert.are.equal(1, percent)
+        assert.are.equal(250, page)
+      end)
+
+      it("returns the highest page label after the last labeled page if no remote page available", function()
+        local page_map = PageMapper:new {
+          state = {},
+          ui = ui(map)
+        }
+
+        local percent, page = page_map:getRemotePagePercent(35, 40)
+
+        assert.are.equal(1, percent)
+        assert.are.equal(200, page)
+      end)
     end)
   end)
 end)

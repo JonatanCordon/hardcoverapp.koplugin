@@ -18,6 +18,23 @@
 * Show a message and disable the plugin when the API key is missing, instead of failing to load
 * Report when a book status could not be saved, instead of always showing "saved"
 * Mark more menu and dialog text as translatable
+* Fix reading progress being lost when the device suspends, while offline, or when an update request fails. The
+  latest page is now kept until it has been sent
+* Fix progress-based tracking possibly clearing your Hardcover progress after the last labeled page of a book
+* Fix progress not being tracked in scroll mode after a book was linked automatically
+* Fix changing a book's status from the menu resetting its privacy setting to the account default
+* Fix default edition for journal entries using your first read instead of your most recent one
+* Fix possible crash when updating the status of a book which is not linked
+
+### Changed
+
+* Time-based progress updates no longer turn on wifi every few minutes when "Enable wifi on demand" is enabled.
+  Progress is sent when wifi connects, on resume, and when closing the document instead
+* Show a "Contacting Hardcover…" message while the interface waits for a request
+* Use fewer requests when finding editions, marking a book as read, and changing status visibility
+* Decode search result covers at display size, reducing memory use
+* Scroll mode page updates are debounced like page mode
+* Load dialogs and search menus only when first used, reducing startup time and memory use
 
 ## 0.4.0 (2026-04-26)
 

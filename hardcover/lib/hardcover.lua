@@ -106,8 +106,7 @@ function Hardcover:updateCurrentBookStatus(status, privacy_setting_id)
 end
 
 function Hardcover:changeBookVisibility(visibility)
-  self.cache:cacheUserBook()
-
+  -- book status was fetched when opening the status menu
   if self.state.book_status.id then
     self:updateCurrentBookStatus(self.state.book_status.status_id, visibility)
   end

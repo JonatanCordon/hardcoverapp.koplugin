@@ -175,10 +175,28 @@ function CoverMenu:updateItems(select_number, no_recalculate_dimen)
       UIManager:scheduleIn(1, function()
         image_batch, self.halt_image_loading = ImageLoader:loadImages(images, function(url, content)
           for _, item in ipairs(items_by_cover_url[url]) do
+            -- Decode at display size rather than full resolution, to save memory
+            local entry = item.entry
+            local width, height
+            local specs = self.cover_specs
+            if specs and entry.cover_w and entry.cover_h and entry.cover_w > 0 and entry.cover_h > 0 then
+              local scale = math.min(specs.max_cover_w / entry.cover_w, specs.max_cover_h / entry.cover_h, 1)
+              width = math.max(1, math.floor(entry.cover_w * scale + 0.5))
+              height = math.max(1, math.floor(entry.cover_h * scale + 0.5))
+            end
+
+            local cover_bb = RenderImage:renderImageData(content, #content, false, width, height)
+            if not cover_bb then
+              break
+            end
+
             item.entry.lazy_load_cover = false
             item.entry.has_cover = true
 
-            item.entry.cover_bb = RenderImage:renderImageData(content, #content, false, item.cover_w, item.cover_h)
+            item.entry.cover_bb = cover_bb
+            -- ListMenu scales the cover from these dimensions
+            item.entry.cover_w = cover_bb:getWidth()
+            item.entry.cover_h = cover_bb:getHeight()
             item.entry.cover_bb:setAllocated(1)
             item:update()
 

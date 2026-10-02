@@ -3,9 +3,7 @@ local json = require("json")
 
 local UIManager = require("ui/uimanager")
 
-local ConfirmBox = require("ui/widget/confirmbox")
 local InfoMessage = require("ui/widget/infomessage")
-local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
 
 local Api = require("hardcover/lib/hardcover_api")
 local Book = require("hardcover/lib/book")
@@ -13,8 +11,8 @@ local User = require("hardcover/lib/user")
 
 local HARDCOVER = require("hardcover/lib/constants/hardcover")
 
-local JournalDialog = require("hardcover/lib/ui/journal_dialog")
-local SearchDialog = require("hardcover/lib/ui/search_dialog")
+-- Dialogs (and the cover list menus they depend on) are required when first used,
+-- to reduce plugin startup time and memory use
 
 local DialogManager = {}
 DialogManager.__index = DialogManager
@@ -67,6 +65,7 @@ function DialogManager:buildSearchDialog(title, items, active_item, book_callbac
     self.search_dialog:free()
   end
 
+  local SearchDialog = require("hardcover/lib/ui/search_dialog")
   self.search_dialog = SearchDialog:new {
     compatibility_mode = self.settings:compatibilityMode(),
     title = title,
@@ -83,6 +82,7 @@ end
 function DialogManager:confirm(options)
   options.text = options.text or _("Are you sure?")
 
+  local ConfirmBox = require("ui/widget/confirmbox")
   UIManager:show(ConfirmBox:new(options))
 end
 
@@ -111,6 +111,7 @@ function DialogManager:buildBookListDialog(title, items, icon_callback, disable_
     self.search_dialog:free()
   end
 
+  local SearchDialog = require("hardcover/lib/ui/search_dialog")
   self.search_dialog = SearchDialog:new {
     compatibility_mode = self.settings:compatibilityMode(),
     title = title,
@@ -118,6 +119,7 @@ function DialogManager:buildBookListDialog(title, items, icon_callback, disable_
     left_icon_callback = icon_callback,
     left_icon = "cre.render.reload",
     select_book_cb = function(book)
+      local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
       local clean_title = book.title:gsub("^The ", ""):gsub("^An ", ""):gsub("^A ", ""):gsub(" ?%(%d+%)$", "")
 
       FileSearcher.search_path = G_reader_settings:readSetting("home_dir")
@@ -174,6 +176,7 @@ function DialogManager:journalEntryForm(text, document, page, remote_pages, mapp
   mapped_page = mapped_page or self.page_mapper:getMappedPage(page, document:getPageCount(), remote_pages)
   -- whether wifi was enabled for this dialog, and should be disabled again afterward
   local disable_wifi_after = false
+  local JournalDialog = require("hardcover/lib/ui/journal_dialog")
   local dialog
   dialog = JournalDialog:new {
     input = text,
